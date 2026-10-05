@@ -109,7 +109,7 @@ private class PhoneLink(private val context: Context) {
                 val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
                         if (intent?.action != BluetoothDevice.ACTION_FOUND) return
-                        val device = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) else @Suppress("DEPRECATION") intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                        val device = getBluetoothDevice(intent)
                         executor.execute { if (device != null && tryDevice(device)) { try { a.cancelDiscovery() } catch (_: Exception) {}; unregisterDiscoveryReceiver() } }
                     }
                 }
@@ -120,6 +120,15 @@ private class PhoneLink(private val context: Context) {
                 main.postDelayed({ try { a.cancelDiscovery(); unregisterDiscoveryReceiver() } catch (_: Exception) {}; if (socket == null) onStatus("Game " + code + " not found. Keep phones close and try again.") }, 20000)
             } catch (e: SecurityException) { main.post { onStatus("Bluetooth permission required") } }
             catch (e: Exception) { main.post { onStatus("Join error: " + (e.message ?: "try again")) } }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun getBluetoothDevice(intent: Intent): BluetoothDevice? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+        } else {
+            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
         }
     }
 
