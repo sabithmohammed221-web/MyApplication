@@ -184,12 +184,32 @@ private fun LudoControllerApp() {
             modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = 16.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Column {
-                    Text("LUDO LAB", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
-                    Text("Two-phone local game simulator", color = Color(0xFF9AA0AC), fontSize = 12.sp)
+            // Lower, more game-like header with a circular Ludo-style layer.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier.size(68.dp).clip(CircleShape)
+                        .background(Color(0xFF171A23))
+                        .border(3.dp, Color(0xFF7658FF), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier.size(48.dp).clip(CircleShape)
+                            .background(Color(0xFF0D0F15))
+                            .border(2.dp, Color(0xFFB9A4FF), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("L", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.ExtraBold)
+                    }
                 }
-                Text("v2.0", color = Color(0xFFB9A4FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("LUDO LAB", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+                    Text("PHONE • PLAY • CONNECT", color = Color(0xFF8E94A3), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+                Text("2P", color = Color(0xFFB9A4FF), fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
             }
 
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF11131A)), shape = RoundedCornerShape(18.dp)) {
