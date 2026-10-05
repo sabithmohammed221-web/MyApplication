@@ -17,7 +17,16 @@ import android.bluetooth.BluetoothManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.Manifest
+import android.app.Activity
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.provider.Settings
 import android.os.Handler
 import android.os.Looper
@@ -99,8 +108,8 @@ private class PhoneLink(private val context: android.content.Context) {
         executor.execute {
             try {
                 val a = adapter() ?: throw IllegalStateException("Bluetooth not supported")
-                val device = a.getRemoteDevice(address.trim())
                 a.cancelDiscovery()
+                val device = a.getRemoteDevice(address.trim())
                 main.post { onStatus("Connecting…") }
                 val connected = device.createRfcommSocketToServiceRecord(uuid)
                 connected.connect()
@@ -146,6 +155,23 @@ class MainActivity : ComponentActivity() {
 }
 
 private fun bluetoothReady(context: android.content.Context): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+        context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+        (context as? Activity)?.requestPermissions(
+            arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN), 1001
+        )
+        return false
+    }
+    val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+    if (adapter == null) return false
+    if (!adapter.isEnabled) {
+        context.startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+        return false
+    }
+    return true
+}
+
+private fun bluetoothReady(context: Context): Boolean {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
         context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
         (context as? Activity)?.requestPermissions(
@@ -514,7 +540,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun LudoControllerApp() {
-    val link = remember { PhoneLink() }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val link = remember { PhoneLink(context) }
     var selectedPlayer by remember { mutableIntStateOf(0) }
     var forcedDice by remember { mutableStateOf<Int?>(null) }
     var lastDice by remember { mutableIntStateOf(1) }
@@ -574,7 +601,7 @@ private fun LudoControllerApp() {
 
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF090A0F)) {
         Column(
-            modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = 16.dp, vertical = 18.dp),
+            modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = 16.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Spacer(Modifier.height(22.dp))
