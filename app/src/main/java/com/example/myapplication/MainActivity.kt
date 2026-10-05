@@ -115,8 +115,16 @@ private class PhoneLink(private val context: Context) {
                 }
                 discoveryReceiver = receiver
                 val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
-                if (Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED) else @Suppress("DEPRECATION") context.registerReceiver(receiver, filter)
-                a.startDiscovery()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+                } else {
+                    registerDiscoveryReceiverLegacy(receiver, filter)
+                }
+                if (!a.startDiscovery()) {
+                    unregisterDiscoveryReceiver()
+                    main.post { onStatus("Bluetooth discovery could not start") }
+                    return@execute
+                }
                 main.postDelayed({ try { a.cancelDiscovery(); unregisterDiscoveryReceiver() } catch (_: Exception) {}; if (socket == null) onStatus("Game " + code + " not found. Keep phones close and try again.") }, 20000)
             } catch (e: SecurityException) { main.post { onStatus("Bluetooth permission required") } }
             catch (e: Exception) { main.post { onStatus("Join error: " + (e.message ?: "try again")) } }
@@ -130,6 +138,14 @@ private class PhoneLink(private val context: Context) {
         } else {
             intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun registerDiscoveryReceiverLegacy(
+        receiver: BroadcastReceiver,
+        filter: IntentFilter
+    ) {
+        context.registerReceiver(receiver, filter)
     }
 
     private fun unregisterDiscoveryReceiver() { try { discoveryReceiver?.let { context.unregisterReceiver(it) } } catch (_: Exception) {}; discoveryReceiver = null }
