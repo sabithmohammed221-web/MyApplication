@@ -58,78 +58,76 @@ private class PhoneLink(private val context: Context) {
     private var server: BluetoothServerSocket? = null
     private var socket: BluetoothSocket? = null
     private var writer: PrintWriter? = null
+    private var discoveryReceiver: BroadcastReceiver? = null
 
     companion object {
-        private const val SERVICE_NAME = "LudoLab"
+        private const val SERVICE_NAME = "LudoLabGame"
         private val SERVICE_UUID = UUID.fromString("8c5b6e10-6a9e-4e43-9c0d-4d1a8c5a4b21")
     }
 
     private fun adapter(): BluetoothAdapter? =
         (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
 
-    fun host(onStatus: (String) -> Unit, onMessage: (String) -> Unit) {
+    fun createGame(onCode: (String) -> Unit, onStatus: (String) -> Unit, onMessage: (String) -> Unit) {
         executor.execute {
             try {
-                val adapter = adapter() ?: throw IllegalStateException("Bluetooth is not supported")
+                val a = adapter() ?: throw IllegalStateException("Bluetooth is not supported")
+                val code = Random.nextInt(1000, 10000).toString()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && context.checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) throw SecurityException("Bluetooth advertise permission required")
+                a.name = "LUDO-" + code
                 server?.close()
-                server = adapter.listenUsingRfcommWithServiceRecord(SERVICE_NAME, SERVICE_UUID)
-                main.post { onStatus("Waiting for Phone 2…") }
+                server = a.listenUsingRfcommWithServiceRecord(SERVICE_NAME, SERVICE_UUID)
+                main.post { onCode(code); onStatus("Waiting for Player 2…") }
+                try { context.startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply { putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300); addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }) } catch (_: Exception) { }
                 val accepted = server!!.accept()
                 socket = accepted
                 writer = PrintWriter(accepted.outputStream, true)
-                main.post { onStatus("Connected") }
+                main.post { onStatus("Connected ✓") }
                 listen(accepted, onMessage, onStatus)
-            } catch (e: SecurityException) {
-                main.post { onStatus("Bluetooth permission required") }
-            } catch (e: Exception) {
-                main.post { onStatus("Host error: " + (e.message ?: "connection failed")) }
-            }
+            } catch (e: SecurityException) { main.post { onStatus(e.message ?: "Bluetooth permission required") } }
+            catch (e: Exception) { main.post { onStatus("Create error: " + (e.message ?: "connection failed")) } }
         }
     }
 
-    fun join(address: String, onStatus: (String) -> Unit, onMessage: (String) -> Unit) {
+    fun joinGame(code: String, onStatus: (String) -> Unit, onMessage: (String) -> Unit) {
         executor.execute {
             try {
-                val adapter = adapter() ?: throw IllegalStateException("Bluetooth is not supported")
-                adapter.cancelDiscovery()
-                main.post { onStatus("Connecting…") }
-                val device = adapter.getRemoteDevice(address.trim())
-                val connected = device.createRfcommSocketToServiceRecord(SERVICE_UUID)
-                connected.connect()
-                socket = connected
-                writer = PrintWriter(connected.outputStream, true)
-                main.post { onStatus("Connected") }
-                listen(connected, onMessage, onStatus)
-            } catch (e: SecurityException) {
-                main.post { onStatus("Bluetooth permission required") }
-            } catch (e: Exception) {
-                main.post { onStatus("Join error: " + (e.message ?: "check the Bluetooth MAC address")) }
-            }
+                val a = adapter() ?: throw IllegalStateException("Bluetooth is not supported")
+                val targetName = "LUDO-" + code.trim()
+                a.cancelDiscovery()
+                main.post { onStatus("Searching for " + targetName + "…") }
+                fun tryDevice(device: BluetoothDevice): Boolean = try {
+                    if (device.name != targetName) return false
+                    val s = device.createRfcommSocketToServiceRecord(SERVICE_UUID)
+                    s.connect(); socket = s; writer = PrintWriter(s.outputStream, true)
+                    main.post { onStatus("Connected ✓") }; listen(s, onMessage, onStatus); true
+                } catch (_: Exception) { false }
+                for (device in a.bondedDevices.toList()) if (tryDevice(device)) return@execute
+                val receiver = object : BroadcastReceiver() {
+                    override fun onReceive(ctx: Context?, intent: Intent?) {
+                        if (intent?.action != BluetoothDevice.ACTION_FOUND) return
+                        val device = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) else @Suppress("DEPRECATION") intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                        executor.execute { if (device != null && tryDevice(device)) { try { a.cancelDiscovery() } catch (_: Exception) {}; unregisterDiscoveryReceiver() } }
+                    }
+                }
+                discoveryReceiver = receiver
+                val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
+                if (Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED) else @Suppress("DEPRECATION") context.registerReceiver(receiver, filter)
+                a.startDiscovery()
+                main.postDelayed({ try { a.cancelDiscovery(); unregisterDiscoveryReceiver() } catch (_: Exception) {}; if (socket == null) onStatus("Game " + code + " not found. Keep phones close and try again.") }, 20000)
+            } catch (e: SecurityException) { main.post { onStatus("Bluetooth permission required") } }
+            catch (e: Exception) { main.post { onStatus("Join error: " + (e.message ?: "try again")) } }
         }
     }
 
+    private fun unregisterDiscoveryReceiver() { try { discoveryReceiver?.let { context.unregisterReceiver(it) } } catch (_: Exception) {}; discoveryReceiver = null }
     private fun listen(target: BluetoothSocket, onMessage: (String) -> Unit, onStatus: (String) -> Unit) {
-        try {
-            val reader = target.inputStream.bufferedReader()
-            while (target.isConnected) {
-                val line = reader.readLine() ?: break
-                main.post { onMessage(line) }
-            }
-        } catch (_: Exception) {
-        } finally {
-            main.post { onStatus("Disconnected") }
-        }
+        try { val reader = target.inputStream.bufferedReader(); while (target.isConnected) { val line = reader.readLine() ?: break; main.post { onMessage(line) } } }
+        catch (_: Exception) {} finally { main.post { onStatus("Disconnected") } }
     }
-
     fun send(message: String) { executor.execute { writer?.println(message) } }
-
-    fun close() {
-        try { socket?.close() } catch (_: Exception) {}
-        try { server?.close() } catch (_: Exception) {}
-        writer = null
-    }
+    fun close() { unregisterDiscoveryReceiver(); try { socket?.close() } catch (_: Exception) {}; try { server?.close() } catch (_: Exception) {}; writer = null }
 }
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -142,17 +140,15 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private fun bluetoothReady(context: Context): Boolean {
+private fun bluetoothReady(context: Context, needAdvertise: Boolean = false): Boolean {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        val connectGranted = context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-        val scanGranted = context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
-        if (!connectGranted || !scanGranted) {
-            (context as? Activity)?.requestPermissions(
-                arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN), 1001
-            )
+        val permissions = mutableListOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+        if (needAdvertise) permissions += Manifest.permission.BLUETOOTH_ADVERTISE
+        val missing = permissions.filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) {
+            (context as? Activity)?.requestPermissions(missing.toTypedArray(), 1001)
             return false
-        }
-    }
+        }    }
     val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter ?: return false
     if (!adapter.isEnabled) {
         context.startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
@@ -171,7 +167,8 @@ private fun LudoControllerApp() {
     var turn by remember { mutableIntStateOf(0) }
     var gameNumber by remember { mutableIntStateOf(1) }
     var linkStatus by remember { mutableStateOf("Not connected") }
-    var bluetoothAddress by remember { mutableStateOf("") }
+    var gameCode by remember { mutableStateOf("") }
+    var joinCode by remember { mutableStateOf("") }
     var history by remember { mutableStateOf(listOf<String>()) }
     val scrollState = rememberScrollState()
     val player = players[selectedPlayer]
@@ -211,16 +208,11 @@ private fun LudoControllerApp() {
         }
     }
 
-    fun connectHost() {
-        if (bluetoothReady(context)) link.host({ linkStatus = it }, ::applyRemote)
-    }
+    fun createGame() { if (bluetoothReady(context, true)) link.createGame({ gameCode = it }, { linkStatus = it }, ::applyRemote) }
 
-    fun connectJoin() {
-        if (bluetoothAddress.isBlank()) {
-            linkStatus = "Enter Phone 1 MAC address"
-            return
-        }
-        if (bluetoothReady(context)) link.join(bluetoothAddress, { linkStatus = it }, ::applyRemote)
+    fun joinGame() {
+        if (joinCode.length != 4) { linkStatus = "Enter the 4-digit game code"; return }
+        if (bluetoothReady(context)) link.joinGame(joinCode, { linkStatus = it }, ::applyRemote)
     }
 
     fun rollDice() {
@@ -272,33 +264,17 @@ private fun LudoControllerApp() {
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("BLUETOOTH CONNECTION", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        "Turn Bluetooth ON and pair both phones in Android Bluetooth settings. Phone 1 hosts; Phone 2 joins using Phone 1's Bluetooth MAC address.",
-                        color = Color(0xFFB7BBC7), fontSize = 12.sp
-                    )
-                    Text(
-                        "Status: " + linkStatus,
-                        color = if (linkStatus == "Connected") Color(0xFF69E58A) else Color(0xFFFFC857),
-                        fontSize = 12.sp, fontWeight = FontWeight.Bold
-                    )
-                    Button(
-                        onClick = { context.startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF282D3A))
-                    ) { Text("OPEN BLUETOOTH SETTINGS") }
+                    Text("Phone 1 creates a 4-digit code. Phone 2 enters the same code. No MAC address.", color = Color(0xFFB7BBC7), fontSize = 12.sp)
+                    Text("Status: " + linkStatus, color = if (linkStatus == "Connected") Color(0xFF69E58A) else Color(0xFFFFC857), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(onClick = ::connectHost, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7658FF))) { Text("HOST") }
-                        Button(onClick = ::connectJoin, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4E3A9E))) { Text("JOIN") }
+                        Button(onClick = ::createGame, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7658FF))) { Text("CREATE GAME") }
+                        Button(onClick = ::joinGame, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4E3A9E))) { Text("JOIN GAME") }
                     }
-                    OutlinedTextField(
-                        value = bluetoothAddress,
-                        onValueChange = { bluetoothAddress = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Phone 1 Bluetooth MAC address") },
-                        placeholder = { Text("Example: AA:BB:CC:DD:EE:FF") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii)
-                    )
+                    if (gameCode.isNotEmpty()) {
+                        Text("GAME CODE", modifier = Modifier.fillMaxWidth(), color = Color(0xFFB7BBC7), fontSize = 10.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                        Text(gameCode, modifier = Modifier.fillMaxWidth(), color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center)
+                    }
+                    OutlinedTextField(value = joinCode, onValueChange = { if (it.length <= 4 && it.all(Char::isDigit)) joinCode = it }, modifier = Modifier.fillMaxWidth(), label = { Text("4-digit game code") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 }
             }
 
@@ -402,7 +378,7 @@ private fun LudoControllerApp() {
             }
 
             Text(
-                "Bluetooth mode synchronizes this app's own local simulator. It does not alter a third-party Ludo game.",
+                "This is the Ludo game in this app. Two phones can sync using the 4-digit connection code.",
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 color = Color(0xFF6F7482),
                 fontSize = 10.sp,
